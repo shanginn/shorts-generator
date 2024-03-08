@@ -1,7 +1,9 @@
 import json
 import os
+import random
 
 import moviepy.editor as mp
+from moviepy.audio.fx.volumex import volumex
 from moviepy.video.VideoClip import TextClip, ColorClip
 from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
 import requests
@@ -103,8 +105,20 @@ class Editor:
             captions = self.create_caption(line, frame_size)
             all_line_level_splits.extend(captions)
 
-        # Load the input audio
+        # Load the input audio (voiceover)
         input_audio = mp.AudioFileClip(audio_path)
+
+        # Select a random song from the 'songs' folder
+        songs_folder = os.path.join(os.path.dirname(__file__), 'songs')
+        song_files = [f for f in os.listdir(songs_folder) if f.endswith('.m4a') or f.endswith('.mp3')]
+        random_song_path = os.path.join(songs_folder, random.choice(song_files))
+
+        # Load the background music and set its volume lower than the voiceover
+        background_music = volumex(mp.AudioFileClip(random_song_path), 0.1)
+        background_music = background_music.subclip(0, min(input_audio.duration, background_music.duration))
+
+        # Combine the voiceover and background music
+        combined_audio = mp.CompositeAudioClip([input_audio, background_music])
 
         # Get the duration of the input audio
         input_audio_duration = input_audio.duration
@@ -115,8 +129,8 @@ class Editor:
         # Combine the background clip and subtitles
         final_video = CompositeVideoClip([background_clip] + all_line_level_splits)
 
-        # Set the audio of the final video to be the same as the input audio
-        final_video = final_video.set_audio(input_audio)
+        # Set the audio of the final video to be the combined audio
+        final_video = final_video.set_audio(combined_audio)
 
         # Save the final video
         final_video.write_videofile(output_path, fps=24, codec="libx264", audio_codec="aac")
@@ -184,13 +198,12 @@ class Editor:
         for index, word_json in enumerate(text_json['words']):
             duration = word_json['end'] - word_json['start']
             word_clip = TextClip(
-                    word_json['word'] + ' ',
-                    font=font,
-                    fontsize=fontsize,
-                    color=color,
-                    stroke_color='black',
-                    stroke_width=4
-                ).set_start(text_json['start']).set_duration(full_duration)
+                word_json['word'] + ' ',
+                font=font,
+                fontsize=fontsize,
+                bg_color='black',
+                color=color,
+            ).set_start(text_json['start']).set_duration(full_duration)
             word_width, word_height = word_clip.size
 
             if x_pos + word_width > frame_width - 2 * x_buffer:
@@ -220,8 +233,6 @@ class Editor:
                 fontsize=fontsize,
                 color=color,
                 bg_color=bgcolor,
-                stroke_color='black',
-                stroke_width=4
             ).set_start(highlight_word['start']).set_duration(highlight_word['duration'])
 
             word_clip_highlight = word_clip_highlight.set_position((highlight_word['x_pos'], highlight_word['y_pos']))

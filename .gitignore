@@ -5,3 +5,4 @@ venv
 *.mp4
 *.json
 stock_videos/*
+songs/*
