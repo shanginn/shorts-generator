@@ -1,0 +1,10 @@
+result==0.16.1
+python-dotenv==1.0.1
+docstring-parser==0.15
+aiohttp==3.9.3
+json5==0.9.22
+tenacity==8.2.3
+termcolor==2.4.0
+asyncio==3.4.3
+openai==1.13.3
+moviepy==1.0.3
