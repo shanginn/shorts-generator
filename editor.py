@@ -1,24 +1,107 @@
 import json
+import os
+
 import moviepy.editor as mp
 from moviepy.video.VideoClip import TextClip, ColorClip
 from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
+import requests
+from typing import List
+
+from moviepy.video.fx.crop import crop
+from termcolor import colored
+
+from Openai import SystemMessage, OpenAIChat, ModelConfig, AssistantMessage
+
 
 class Editor:
-    def burn_subtitles(self, audio_path: str, subtitles_path: str, output_path: str):
-        # Load the subtitles from the JSON file
-        with open(subtitles_path, 'r') as f:
-            subtitles = json.load(f)
+    used_videos = {}
+    files_folder = 'stock_videos'
 
-        # Split the text into lines
-        subtitles = self.split_text_into_lines(subtitles)
+    def download_and_trim_video(self, url, duration, target_dimensions):
+        video_filename = url.split('/')[-1]
+        video_filename = video_filename.split('?')[0]
+        video_path = f'{self.files_folder}/{video_filename}'
+        trimmed_filename = f'trimmed_{video_filename}'
+        trimmed_path = f'{self.files_folder}/{trimmed_filename}'
 
+        if os.path.exists(trimmed_path):
+            return trimmed_path
+
+        if not os.path.exists(video_path):
+            # Download the video
+            response = requests.get(url)
+
+            with open(video_path, "wb") as file:
+                file.write(response.content)
+
+        # Load the video
+        video_clip = mp.VideoFileClip(video_path)
+
+        # Adjust start_time and end_time to be within the video's duration
+        video_duration = video_clip.duration
+
+        start_time = 0
+        end_time = min(duration, video_duration)
+
+        # Load and trim the video
+        video_clip = (
+            mp
+              .VideoFileClip(video_path)
+              .subclip(start_time, end_time)
+        )
+
+        # Resize and crop the video to the target dimensions
+        video_clip = video_clip.resize(newsize=target_dimensions)
+        video_clip = crop(video_clip, width=target_dimensions[0], height=target_dimensions[1],
+                          x_center=video_clip.w / 2, y_center=video_clip.h / 2)
+
+        # Save the trimmed video
+        video_clip.write_videofile(trimmed_path, codec="libx264")
+
+        return trimmed_path
+
+    def select_stock_video(self, start_time, end_time, stock_candidates):
+        selected_video = None
+        for url in stock_candidates:
+            if url not in self.used_videos or self.used_videos[url] < start_time:
+                selected_video = url
+                break
+
+        if not selected_video:
+            # Extend the previous video segment if possible
+            for url, used_end_time in self.used_videos.items():
+                if used_end_time >= start_time:
+                    selected_video = url
+                    self.used_videos[url] = max(used_end_time, end_time)
+                    break
+
+        if not selected_video:
+            # Reuse a non-unique video
+            selected_video = stock_candidates[0]
+
+        self.used_videos[selected_video] = end_time
+        return selected_video
+
+    def burn_subtitles(self, audio_path: str, subtitles_lines, output_path: str):
         # Create the video with subtitles
         frame_size = (1080, 1920)
         all_line_level_splits = []
 
-        for line in subtitles:
-            out = self.create_caption(line, frame_size)
-            all_line_level_splits.extend(out)
+        for line in subtitles_lines:
+            stock_video_url = self.select_stock_video(line['start'], line['end'], line['stock_candidates'])
+            trimmed_video_path = self.download_and_trim_video(stock_video_url, line['end'] - line['start'], frame_size)
+
+            video_clip = (
+                mp
+                .VideoFileClip(trimmed_video_path)
+                .set_start(line['start'])
+                .set_duration(line['end'] - line['start'])
+            )
+            all_line_level_splits.append(video_clip)
+
+            # Create captions
+            captions = self.create_caption(line, frame_size)
+            all_line_level_splits.extend(captions)
 
         # Load the input audio
         input_audio = mp.AudioFileClip(audio_path)
@@ -38,7 +121,7 @@ class Editor:
         # Save the final video
         final_video.write_videofile(output_path, fps=24, codec="libx264", audio_codec="aac")
 
-    def split_text_into_lines(self, data):
+    def split_words_into_lines(self, subtitles_json: list[dict]):
         max_chars = 80
         max_duration = 3.0
         max_gap = 1.5
@@ -47,7 +130,7 @@ class Editor:
         line = []
         line_duration = 0
 
-        for idx, word_data in enumerate(data):
+        for idx, word_data in enumerate(subtitles_json):
             word = word_data["word"]
             start = word_data["start"]
             end = word_data["end"]
@@ -60,12 +143,12 @@ class Editor:
 
             duration_exceeded = line_duration > max_duration
             chars_exceeded = new_line_chars > max_chars
-            maxgap_exceeded = (idx > 0) and (start - data[idx - 1]['end'] > max_gap)
+            maxgap_exceeded = (idx > 0) and (start - subtitles_json[idx - 1]['end'] > max_gap)
 
             if duration_exceeded or chars_exceeded or maxgap_exceeded:
                 if line:
                     subtitle_line = {
-                        "line": " ".join(item["word"] for item in line),
+                        "text": " ".join(item["word"] for item in line),
                         "start": line[0]["start"],
                         "end": line[-1]["end"],
                         "words": line
@@ -76,7 +159,7 @@ class Editor:
 
         if line:
             subtitle_line = {
-                "line": " ".join(item["word"] for item in line),
+                "text": " ".join(item["word"] for item in line),
                 "start": line[0]["start"],
                 "end": line[-1]["end"],
                 "words": line
@@ -100,11 +183,14 @@ class Editor:
 
         for index, word_json in enumerate(text_json['words']):
             duration = word_json['end'] - word_json['start']
-            word_clip = (
-                TextClip(word_json['word'] + ' ', font=font, fontsize=fontsize, color=color)
-                     .set_start(text_json['start'])
-                     .set_duration(full_duration)
-             )
+            word_clip = TextClip(
+                    word_json['word'] + ' ',
+                    font=font,
+                    fontsize=fontsize,
+                    color=color,
+                    stroke_color='black',
+                    stroke_width=4
+                ).set_start(text_json['start']).set_duration(full_duration)
             word_width, word_height = word_clip.size
 
             if x_pos + word_width > frame_width - 2 * x_buffer:
@@ -128,12 +214,115 @@ class Editor:
             word_clips.append(word_clip)
 
         for highlight_word in xy_textclips_positions:
-            word_clip_highlight = (
-                TextClip(highlight_word['word'], font=font, fontsize=fontsize, color=color, bg_color=bgcolor)
-                   .set_start(highlight_word['start'])
-                   .set_duration(highlight_word['duration'])
-            )
+            word_clip_highlight = TextClip(
+                highlight_word['word'],
+                font=font,
+                fontsize=fontsize,
+                color=color,
+                bg_color=bgcolor,
+                stroke_color='black',
+                stroke_width=4
+            ).set_start(highlight_word['start']).set_duration(highlight_word['duration'])
+
             word_clip_highlight = word_clip_highlight.set_position((highlight_word['x_pos'], highlight_word['y_pos']))
             word_clips.append(word_clip_highlight)
 
         return word_clips
+
+
+class StockFinder:
+    def __init__(self, pexels_api_key: str, openai_api_key: str):
+        self.pexels_api_key = pexels_api_key
+
+        self.openai = OpenAIChat(
+            openai_api_key,
+            model='gpt-3.5-turbo-0125',
+            config=ModelConfig(temperature=0.3),
+        )
+
+    async def get_keywords(self, paragraph: str) -> str:
+        system_message = SystemMessage(
+            'You are a talented ENGLISH keywords maker. ' 
+            'Given the input phrase in any language, you will generate very short (1 to 3 ENGLISH words) '
+            'sentence that will be used to find a stock footage video. '
+            'No intro, no outro, just the words IN ENGLISH.'
+        )
+
+        messages = [
+            system_message,
+            AssistantMessage(paragraph)
+        ]
+
+        result = await self.openai.completion(
+            messages,
+        )
+
+        if result.is_err():
+            raise Exception(result.err())
+
+        return result.ok().content
+
+    def search_pexels(self, query: str, per_page: int) -> dict:
+        headers = {
+            "Authorization": self.pexels_api_key
+        }
+
+        query_params = {
+            'query': query,
+            'per_page': per_page,
+            'orientation': 'portrait'
+        }
+
+        return requests.get(
+            "https://api.pexels.com/videos/search",
+            params=query_params,
+            headers=headers
+        ).json()
+
+    async def search_for_stock_videos(
+        self,
+        paragraph: str,
+        min_dur: int
+    ) -> List[str]:
+        per_page = 10
+
+        keywords = await self.get_keywords(paragraph)
+
+        print(colored(f"Searching for videos related to: {keywords}. for '{paragraph}'", "cyan"))
+
+        response = self.search_pexels(keywords, per_page)
+
+        raw_urls = []
+        video_url = []
+        video_res = 0
+        try:
+            # loop through each video in the result
+            for i in range(per_page):
+                # check if video has desired minimum duration
+                if response["videos"][i]["duration"] < min_dur:
+                    continue
+                raw_urls = response["videos"][i]["video_files"]
+                temp_video_url = ""
+
+                # loop through each url to determine the best quality
+                for video in raw_urls:
+                    # Check if video has a valid download link
+                    if ".com/external" in video["link"]:
+                        # Only save the URL with the largest resolution
+                        if (video["width"] * video["height"]) > video_res:
+                            temp_video_url = video["link"]
+                            video_res = video["width"] * video["height"]
+
+                # add the url to the return list if it's not empty
+                if temp_video_url != "":
+                    video_url.append(temp_video_url)
+
+        except Exception as e:
+            print(colored("[-] No Videos found.", "red"))
+            print(colored(e, "red"))
+
+        # Let user know
+        print(colored(f"\t=> \"{keywords}\" found {len(video_url)} Videos", "cyan"))
+
+        # Return the video url
+        return video_url
