@@ -1,6 +1,8 @@
 import json
 import os
 import random
+import uuid
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 import moviepy.editor as mp
 from moviepy.audio.fx.volumex import volumex
@@ -19,9 +21,21 @@ class Editor:
     used_videos = {}
     files_folder = 'stock_videos'
 
-    def download_and_trim_video(self, url, duration, target_dimensions):
-        video_filename = url.split('/')[-1]
-        video_filename = video_filename.split('?')[0]
+    @retry(stop=stop_after_attempt(5), wait=wait_fixed(2))
+    def download_video(self, url, video_path):
+        response = requests.get(url)
+        if response.status_code == 200:
+            with open(video_path, "wb") as file:
+                file.write(response.content)
+        else:
+            raise Exception(f"Failed to download video from {url}")
+
+    def download_and_trim_video(self, stock_video: dict, duration: int, target_dimensions: tuple[int, int]) -> str:
+        url = stock_video['url']
+        video_id = stock_video['id']
+
+        video_extension = url.split('.')[-1].split('?')[0]
+        video_filename = f'{video_id}.{video_extension}'
         video_path = f'{self.files_folder}/{video_filename}'
         trimmed_filename = f'trimmed_{video_filename}'
         trimmed_path = f'{self.files_folder}/{trimmed_filename}'
@@ -30,30 +44,24 @@ class Editor:
             return trimmed_path
 
         if not os.path.exists(video_path):
-            # Download the video
-            response = requests.get(url)
-
-            with open(video_path, "wb") as file:
-                file.write(response.content)
+            self.download_video(url, video_path)
 
         # Load the video
         video_clip = mp.VideoFileClip(video_path)
 
         # Adjust start_time and end_time to be within the video's duration
         video_duration = video_clip.duration
-
         start_time = 0
         end_time = min(duration, video_duration)
 
         # Load and trim the video
         video_clip = (
-            mp
-              .VideoFileClip(video_path)
-              .subclip(start_time, end_time)
+            mp.VideoFileClip(video_path)
+            .subclip(start_time, end_time)
+            .resize(newsize=target_dimensions)
         )
 
         # Resize and crop the video to the target dimensions
-        video_clip = video_clip.resize(newsize=target_dimensions)
         video_clip = crop(video_clip, width=target_dimensions[0], height=target_dimensions[1],
                           x_center=video_clip.w / 2, y_center=video_clip.h / 2)
 
@@ -62,26 +70,31 @@ class Editor:
 
         return trimmed_path
 
-    def select_stock_video(self, start_time, end_time, stock_candidates):
+    def select_stock_video(self, start_time, end_time, stock_candidates) -> dict:
         selected_video = None
-        for url in stock_candidates:
-            if url not in self.used_videos or self.used_videos[url] < start_time:
-                selected_video = url
+        shuffled_ids = list(stock_candidates.keys())
+        random.shuffle(shuffled_ids)
+
+        for video_id in shuffled_ids:
+            if stock_candidates[video_id] not in self.used_videos:
+                selected_video = {'id': video_id, 'url': stock_candidates[video_id]}
                 break
 
         if not selected_video:
             # Extend the previous video segment if possible
             for url, used_end_time in self.used_videos.items():
                 if used_end_time >= start_time:
-                    selected_video = url
+                    selected_video = {'id': next((id for id, u in stock_candidates.items() if u == url), None),
+                                      'url': url}
                     self.used_videos[url] = max(used_end_time, end_time)
                     break
 
         if not selected_video:
             # Reuse a non-unique video
-            selected_video = stock_candidates[0]
+            first_id = next(iter(stock_candidates))
+            selected_video = {'id': first_id, 'url': stock_candidates[first_id]}
 
-        self.used_videos[selected_video] = end_time
+        self.used_videos[selected_video['url']] = end_time
         return selected_video
 
     def burn_subtitles(self, audio_path: str, subtitles_lines, output_path: str):
@@ -89,9 +102,18 @@ class Editor:
         frame_size = (1080, 1920)
         all_line_level_splits = []
 
-        for line in subtitles_lines:
-            stock_video_url = self.select_stock_video(line['start'], line['end'], line['stock_candidates'])
-            trimmed_video_path = self.download_and_trim_video(stock_video_url, line['end'] - line['start'], frame_size)
+        for i, line in enumerate(subtitles_lines):
+            if len(line['stock_candidates']) == 0:
+                line['stock_candidates'] = subtitles_lines[i - 1]['stock_candidates']
+
+            stock_video = self.select_stock_video(line['start'], line['end'], line['stock_candidates'])
+            line_end = subtitles_lines[i + 1]['start'] if i + 1 < len(subtitles_lines) else line['end']
+
+            trimmed_video_path = self.download_and_trim_video(
+                stock_video,
+                line_end - line['start'],
+                frame_size
+            )
 
             video_clip = (
                 mp
@@ -114,7 +136,7 @@ class Editor:
         random_song_path = os.path.join(songs_folder, random.choice(song_files))
 
         # Load the background music and set its volume lower than the voiceover
-        background_music = volumex(mp.AudioFileClip(random_song_path), 0.1)
+        background_music = volumex(mp.AudioFileClip(random_song_path), 0.08)
         background_music = background_music.subclip(0, min(input_audio.duration, background_music.duration))
 
         # Combine the voiceover and background music
@@ -136,8 +158,8 @@ class Editor:
         final_video.write_videofile(output_path, fps=24, codec="libx264", audio_codec="aac")
 
     def split_words_into_lines(self, subtitles_json: list[dict]):
-        max_chars = 80
-        max_duration = 3.0
+        max_chars = 60
+        max_duration = 1.5
         max_gap = 1.5
 
         subtitles = []
@@ -254,8 +276,8 @@ class StockFinder:
     async def get_keywords(self, paragraph: str) -> str:
         system_message = SystemMessage(
             'You are a talented ENGLISH keywords maker. ' 
-            'Given the input phrase in any language, you will generate very short (1 to 3 ENGLISH words) '
-            'sentence that will be used to find a stock footage video. '
+            'Given the input phrase in any language, you will generate SINGLE NOUN '
+            'that will be used to find a stock footage video. '
             'No intro, no outro, just the words IN ENGLISH.'
         )
 
@@ -284,6 +306,8 @@ class StockFinder:
             'orientation': 'portrait'
         }
 
+        full_url = "https://api.pexels.com/videos/search" + "?" + "&".join([f"{k}={v}" for k, v in query_params.items()])
+
         return requests.get(
             "https://api.pexels.com/videos/search",
             params=query_params,
@@ -294,8 +318,8 @@ class StockFinder:
         self,
         paragraph: str,
         min_dur: int
-    ) -> List[str]:
-        per_page = 10
+    ) -> dict[int, str]:
+        per_page = 50
 
         keywords = await self.get_keywords(paragraph)
 
@@ -303,12 +327,34 @@ class StockFinder:
 
         response = self.search_pexels(keywords, per_page)
 
-        raw_urls = []
-        video_url = []
+        if len(response["videos"]) == 0:
+            # shuffle the keywords and try again
+            keywords = random.choice(keywords.split())
+
+            print(colored(f"Searching for videos related to: {keywords}. for '{paragraph}'", "cyan"))
+
+            response = self.search_pexels(keywords, per_page)
+
+        if len(response["videos"]) == 0:
+            keywords = await self.get_keywords('[FIND DIFFERENT FOR THIS]: ' + paragraph)
+
+        if len(response["videos"]) == 0:
+            # shuffle the keywords and try again
+            keywords = random.choice(keywords.split())
+
+            print(colored(f"Searching for videos related to: {keywords}. for '{paragraph}'", "cyan"))
+
+            response = self.search_pexels(keywords, per_page)
+
+        if len(response["videos"]) == 0:
+            print(colored(f"No videos found for '{paragraph}'", "red"))
+            return {}
+
+        video_urls = {}
         video_res = 0
         try:
             # loop through each video in the result
-            for i in range(per_page):
+            for i in range(len(response["videos"])):
                 # check if video has desired minimum duration
                 if response["videos"][i]["duration"] < min_dur:
                     continue
@@ -318,7 +364,7 @@ class StockFinder:
                 # loop through each url to determine the best quality
                 for video in raw_urls:
                     # Check if video has a valid download link
-                    if ".com/external" in video["link"]:
+                    if ".mp4" in video["link"]:
                         # Only save the URL with the largest resolution
                         if (video["width"] * video["height"]) > video_res:
                             temp_video_url = video["link"]
@@ -326,14 +372,14 @@ class StockFinder:
 
                 # add the url to the return list if it's not empty
                 if temp_video_url != "":
-                    video_url.append(temp_video_url)
+                    video_urls[response["videos"][i]['id']] = temp_video_url
 
         except Exception as e:
             print(colored("[-] No Videos found.", "red"))
             print(colored(e, "red"))
 
         # Let user know
-        print(colored(f"\t=> \"{keywords}\" found {len(video_url)} Videos", "cyan"))
+        print(colored(f"\t=> \"{keywords}\" found {len(video_urls)} Videos", "cyan"))
 
         # Return the video url
-        return video_url
+        return video_urls

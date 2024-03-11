@@ -3,7 +3,7 @@ from result import Err, Ok, Result
 
 
 class Writer:
-    system_message = SystemMessage('''
+    scenario_system_message = SystemMessage('''
 You are a talented essay writer. You have been hired to write an essay.
 
 Generate a script for a video, depending on the subject of the video.
@@ -37,14 +37,14 @@ ONLY RETURN THE RAW CONTENT OF THE SCRIPT. DO NOT INCLUDE "VOICEOVER", "NARRATOR
             config=ModelConfig(temperature=0.1),
         )
 
-    async def write(
+    async def write_scenario(
         self,
         theme: str,
         paragraph_number: int,
         language: str,
     ) -> Result[AssistantMessage, Exception]:
         messages = [
-            self.system_message,
+            self.scenario_system_message,
             AssistantMessage(
                 f'Subject: {theme}'
                 f'Number of paragraphs: {paragraph_number}'
@@ -52,6 +52,6 @@ ONLY RETURN THE RAW CONTENT OF THE SCRIPT. DO NOT INCLUDE "VOICEOVER", "NARRATOR
             )
         ]
 
-        return await self.chat.completion(
+        return await self.gpt4_chat.completion(
             messages,
         )
