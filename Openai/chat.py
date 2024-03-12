@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import json5
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionMessage
+from openai.types.chat.completion_create_params import ResponseFormat
 from result import Result, Ok, Err
 from typing import Dict, List, Optional, Callable, Any, Tuple
 
@@ -34,13 +35,15 @@ class OpenAIChat:
         self,
         messages: List[BaseMessage],
         functions: Optional[Functions] = None,
-        function_call: Optional[str] = None
+        function_call: Optional[str] = None,
+        json_mode: bool = False
     ) -> Result[BaseMessage, Exception]:
         try:
             completion = await self.completion_request(
                 [message.as_dict() for message in messages],
                 functions.as_list() if functions is not None else None,
-                {'name': function_call} if function_call is not None else None
+                {'name': function_call} if function_call is not None else None,
+                json_mode=json_mode
             )
         except Exception as e:
             self.logger.error(f'Error requesting completion: {e}')
@@ -82,13 +85,20 @@ class OpenAIChat:
             ))
 
     @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(3))
-    async def completion_request(self, messages, functions=None, function_call=None) -> ChatCompletion:
+    async def completion_request(
+            self,
+            messages,
+            functions=None,
+            function_call=None,
+            json_mode: bool = False
+    ) -> ChatCompletion:
         return await self.client.chat.completions.create(
             model=self.model,
             messages=messages,
             temperature=self.config.temperature,
             functions=functions if functions else None,
             function_call=function_call if function_call else None,
+            response_format=ResponseFormat(type="json_object" if json_mode else "text"),
         )
 
     @staticmethod
