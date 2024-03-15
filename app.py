@@ -42,16 +42,16 @@ async def main():
     Path(today_video_output_directory).mkdir(parents=True, exist_ok=True)
 
     themes = [
-        # 'Ежедневная зарядка это важно',
-        'Польза чтения книг',
-        'Как справиться со стрессом',
-        'Преимущества раннего подъема',
-        'Искусство активного слушания',
-        'Значение благодарности в жизни',
-        'Как научиться управлять временем',
-        'Преодоление страха публичных выступлений',
-        'Роль хобби в жизни человека',
-        'Влияние позитивного мышления на успех',
+        # "Пять утренних привычек для энергии на весь день",
+        # "Топ-7 продуктов для повышения настроения",
+        # "Улучшаем сон: практические советы",
+        # "Медитация для начинающих: первые шаги к спокойствию",
+        "Как избавиться от стресса: эффективные методы",
+        "Секреты правильного питания для здоровья и счастья",
+        "Простые упражнения для улучшения самочувствия",
+        "Полезные привычки для укрепления иммунитета",
+        "Техники релаксации: как найти внутренний покой",
+        "Борьба с усталостью: советы для поддержания энергии",
     ]
 
     for theme in themes:
@@ -110,13 +110,19 @@ async def main():
 
         output_path = f'{today_video_output_directory}/{theme}.mp4'
 
-        editor.compose_video(
-            subtitles_clips,
-            stock_video_clips,
-            background_music,
-            narration_filename,
-            output_path
-        )
+        try:
+            editor.compose_video(
+                subtitles_clips,
+                stock_video_clips,
+                background_music,
+                narration_filename,
+                output_path
+            )
+        except Exception as e:
+            logger.error(e)
+            logger.info(scenario)
+
+            exit()
 
         print('Done ' + theme)
 

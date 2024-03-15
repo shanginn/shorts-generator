@@ -19,6 +19,7 @@ class TranscriptionWord:
     def from_dict(d: dict):
         start = float(Decimal(d['start']).quantize(Decimal('0.00')))
         end = float(Decimal(d['end']).quantize(Decimal('0.00')))
+
         return TranscriptionWord(
             start=start,
             end=end,
@@ -71,13 +72,25 @@ class ScenarioTextBlock:
             words=[TranscriptionWord.from_dict(word) for word in (d['words'] if 'words' in d else [])],
         )
 
-    def duration(self) -> float:
-        return self.end() - self.start()
+    def duration(self) -> Optional[float]:
+        start = self.start()
+        end = self.end()
 
-    def start(self) -> float:
+        if start is None or end is None:
+            return None
+
+        return end - start
+
+    def start(self) -> Optional[float]:
+        if len(self.words) == 0:
+            return None
+
         return self.words[0].start
 
-    def end(self) -> float:
+    def end(self) -> Optional[float]:
+        if len(self.words) == 0:
+            return None
+
         return self.words[-1].end
 
 

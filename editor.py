@@ -2,6 +2,8 @@ import json
 import os
 import random
 import uuid
+from decimal import Decimal
+
 from tenacity import retry, stop_after_attempt, wait_fixed
 
 import moviepy.editor as mp
@@ -106,12 +108,18 @@ class Editor:
         start_time = 0
         for i, block in enumerate(scenario.text_blocks):
             stock_video = self.select_stock_video(block)
-            if i + 1 in scenario.text_blocks:
+            next_block_start_time = None
+            if i + 1 < len(scenario.text_blocks):
                 next_block_start_time = scenario.text_blocks[i + 1].start()
-            else:
+
+            if next_block_start_time is None:
                 next_block_start_time = scenario.text_blocks[i].end()
 
-            duration = next_block_start_time - start_time
+            if next_block_start_time is None:
+                next_block_start_time = start_time + 5
+
+
+            duration = float(Decimal(next_block_start_time - start_time).quantize(Decimal('0.00')))
 
             trimmed_video_path = self.download_and_trim_video(
                 stock_video,
@@ -171,66 +179,6 @@ class Editor:
         # Save the final video
         final_video.write_videofile(output_path, fps=24, codec="libx264", audio_codec="aac")
 
-
-    def burn_subtitles(self, audio_path: str, subtitles_lines, output_path: str):
-        # Create the video with subtitles
-        frame_size = (1080, 1920)
-        all_line_level_splits = []
-
-        for i, line in enumerate(subtitles_lines):
-            if len(line['stock_candidates']) == 0:
-                line['stock_candidates'] = subtitles_lines[i - 1]['stock_candidates']
-
-            stock_video = self.select_stock_video(line['start'], line['end'], line['stock_candidates'])
-            line_end = subtitles_lines[i + 1]['start'] if i + 1 < len(subtitles_lines) else line['end']
-
-            trimmed_video_path = self.download_and_trim_video(
-                stock_video,
-                line_end - line['start'],
-                frame_size
-            )
-
-            video_clip = (
-                mp
-                .VideoFileClip(trimmed_video_path)
-                .set_start(line['start'])
-                .set_duration(line['end'] - line['start'])
-            )
-            all_line_level_splits.append(video_clip)
-
-            # Create captions
-            captions = self.create_caption(line, frame_size)
-            all_line_level_splits.extend(captions)
-
-        # Load the input audio (voiceover)
-        input_audio = mp.AudioFileClip(audio_path)
-
-        # Select a random song from the 'songs' folder
-        songs_folder = os.path.join(os.path.dirname(__file__), 'songs')
-        song_files = [f for f in os.listdir(songs_folder) if f.endswith('.m4a') or f.endswith('.mp3')]
-        random_song_path = os.path.join(songs_folder, random.choice(song_files))
-
-        # Load the background music and set its volume lower than the voiceover
-        background_music = volumex(mp.AudioFileClip(random_song_path), 0.08)
-        background_music = background_music.subclip(0, min(input_audio.duration, background_music.duration))
-
-        # Combine the voiceover and background music
-        combined_audio = mp.CompositeAudioClip([input_audio, background_music])
-
-        # Get the duration of the input audio
-        input_audio_duration = input_audio.duration
-
-        # Create a black background clip with the given frame size and duration
-        background_clip = ColorClip(size=frame_size, color=(0, 0, 0)).set_duration(input_audio_duration)
-
-        # Combine the background clip and subtitles
-        final_video = CompositeVideoClip([background_clip] + all_line_level_splits)
-
-        # Set the audio of the final video to be the combined audio
-        final_video = final_video.set_audio(combined_audio)
-
-        # Save the final video
-        final_video.write_videofile(output_path, fps=24, codec="libx264", audio_codec="aac")
 
     @staticmethod
     def _text_line_from_words(words: List[TranscriptionWord]) -> TextLine:
@@ -407,6 +355,11 @@ class StockFinder:
             for keyword in block.keywords:
                 response = self.search_pexels(keyword, per_page)
 
+                if 'videos' not in response:
+                    print(response)
+                    print(colored(f"[-] Response error", "red"))
+                    continue
+
                 if len(response["videos"]) == 0 and len(keyword.split()) > 1:
                     print(colored(f"No videos found for '{keyword}' trying search each word", "red"))
                     for single_keyword in keyword.split():
@@ -430,12 +383,12 @@ class StockFinder:
                 video_res = 0
                 try:
                     # loop through each video in the result
-                    for i in range(len(response["videos"])):
+                    for video_data in response["videos"]:
                         # check if video has desired minimum duration
-                        if response["videos"][i]["duration"] < (block.duration() + 0.5):
+                        if video_data["duration"] < ((block.duration() or 5) + 0.5):
                             continue
 
-                        raw_urls = response["videos"][i]["video_files"]
+                        raw_urls = video_data["video_files"]
                         temp_video_url = ""
 
                         # loop through each url to determine the best quality
@@ -449,7 +402,7 @@ class StockFinder:
 
                         # add the url to the return list if it's not empty
                         if temp_video_url != "":
-                            video_urls[response["videos"][i]['id']] = temp_video_url
+                            video_urls[video_data['id']] = temp_video_url
                 except Exception as e:
                     print(colored(f"[-] No Videos found: {e}", "red"))
 
