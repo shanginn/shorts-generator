@@ -1,10 +1,11 @@
 import json
+import logging
 import os
 import random
 import uuid
 from decimal import Decimal
 
-from tenacity import retry, stop_after_attempt, wait_fixed
+from tenacity import retry, stop_after_attempt, wait_fixed, wait_incrementing
 
 import moviepy.editor as mp
 from moviepy.audio.fx.volumex import volumex
@@ -325,6 +326,7 @@ class StockFinder:
 
         return result.ok().content
 
+    @retry(stop=stop_after_attempt(5), wait=wait_incrementing(10, 10, 60))
     def search_pexels(self, query: str, per_page: int) -> dict:
         headers = {
             "Authorization": self.pexels_api_key
@@ -336,11 +338,17 @@ class StockFinder:
             'orientation': 'portrait'
         }
 
-        return requests.get(
+        response = requests.get(
             "https://api.pexels.com/videos/search",
             params=query_params,
-            headers=headers
-        ).json()
+            headers=headers,
+        )
+
+        if response.status_code != 200:
+            logging.error(f"Request failed: {response.json()}")
+            raise Exception(f"Request failed: {response.json()}")
+
+        return response.json()
 
     async def add_stock_video_candidates(
         self,

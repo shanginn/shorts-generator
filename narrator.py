@@ -28,11 +28,11 @@ class Narrator:
             speed=1
         )
 
-    async def get_subtitles(self, file_path: str, scenario: Scenario) -> List[Dict]:
+    async def get_subtitles(self, file_path: str) -> List[Dict]:
         transcription = await self.speech_to_text.speech_to_text(
             file=Path(file_path),
             language='ru',
-            prompt=scenario.full_scenario,
+            #prompt=scenario.full_scenario,
         )
 
         return transcription.words

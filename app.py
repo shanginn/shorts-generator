@@ -46,8 +46,8 @@ async def main():
         # "Топ-7 продуктов для повышения настроения",
         # "Улучшаем сон: практические советы",
         # "Медитация для начинающих: первые шаги к спокойствию",
-        "Как избавиться от стресса: эффективные методы",
-        "Секреты правильного питания для здоровья и счастья",
+        # "Как избавиться от стресса: эффективные методы",
+        # "Секреты правильного питания для здоровья и счастья",
         "Простые упражнения для улучшения самочувствия",
         "Полезные привычки для укрепления иммунитета",
         "Техники релаксации: как найти внутренний покой",
@@ -89,7 +89,7 @@ async def main():
         subtitles_path = f'{today_output_directory}/subtitles_{video_id}.json'
 
         if not os.path.exists(subtitles_path):
-            subtitles = await narrator.get_subtitles(narration_filename, scenario)
+            subtitles = await narrator.get_subtitles(narration_filename)
 
             with open(subtitles_path, 'w') as f:
                 json5.dump(subtitles, f, ensure_ascii=False, indent=4)
@@ -102,9 +102,15 @@ async def main():
         editor.split_words_into_lines(scenario)
         subtitles_clips = editor.get_subtitles_clips(scenario)
 
-        await stock.add_stock_video_candidates(scenario)
+        try:
+            await stock.add_stock_video_candidates(scenario)
 
-        stock_video_clips = editor.get_stock_video_clips(scenario)
+            stock_video_clips = editor.get_stock_video_clips(scenario)
+        except Exception as e:
+            logger.error(e)
+            logger.info(scenario)
+
+            raise e
 
         background_music = editor.get_background_music()
 
@@ -122,7 +128,7 @@ async def main():
             logger.error(e)
             logger.info(scenario)
 
-            exit()
+            raise e
 
         print('Done ' + theme)
 
