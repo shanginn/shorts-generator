@@ -122,6 +122,9 @@ class Editor:
 
             duration = float(Decimal(next_block_start_time - start_time).quantize(Decimal('0.00')))
 
+            if duration <= 0:
+                raise Exception(f"Duration is less than 0: {duration}. {next_block_start_time, start_time}")
+
             trimmed_video_path = self.download_and_trim_video(
                 stock_video,
                 duration,
@@ -359,6 +362,7 @@ class StockFinder:
 
         for block_idx, block in enumerate(scenario.text_blocks):
             print(colored(f"Searching for videos related to: {block.keywords}. for '{block.text}'", "cyan"))
+            video_urls = {}
 
             for keyword in block.keywords:
                 response = self.search_pexels(keyword, per_page)
@@ -379,15 +383,9 @@ class StockFinder:
                             break
 
                 if len(response["videos"]) == 0:
-                    print(colored(f"No videos found for '{block.text}' trying to use previous", "red"))
-                    if block_idx - 1 in found_video_urls:
-                        block.stock_video_urls = found_video_urls[block_idx - 1]
-                    else:
-                        block.stock_video_urls = {}
-
+                    print(colored(f'\t=> "{keyword}"  no videos found. moving on', "yellow"))
                     continue
 
-                video_urls = {}
                 video_res = 0
                 try:
                     # loop through each video in the result
@@ -414,14 +412,11 @@ class StockFinder:
                 except Exception as e:
                     print(colored(f"[-] No Videos found: {e}", "red"))
 
-                    if block_idx - 1 in found_video_urls:
-                        block.stock_video_urls = found_video_urls[block_idx - 1]
-                    else:
-                        block.stock_video_urls = {}
-
                     continue
 
-                # Let user know
+                if len(video_urls) == 0 and block_idx - 1 in found_video_urls:
+                    video_urls = found_video_urls[block_idx - 1]
+
                 print(colored(f"\t=> \"{keyword}\" found {len(video_urls)} Videos", "cyan"))
 
                 found_video_urls[block_idx] = video_urls

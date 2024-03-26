@@ -17,7 +17,7 @@ class Writer:
     scenario_system_message = '''
 Prompt:
 You will be generating an essay scenario in Russian (with keywords in english) 
-about a given subject for a 1-minute long video.
+about a given subject for a 1-minute long video. The narrative should be positive and engaging.
 The output should be in JSON format, with the essay split into logical text blocks. Each text block
 should have a corresponding list of keywords to search for relevant stock footage.
 
@@ -27,7 +27,8 @@ The subject of the essay is:
 </subject>
 
 Here are the steps to follow:
-1. Write the full scenario  IN RUSSIAN in the `full_scenario` field, in Russian. This should be the complete essay. 
+1. Write the full scenario  IN RUSSIAN in the `full_scenario` field, in Russian.
+This should be the complete essay with a positive spin. 
 Aim for a total essay length of approximately 150-200 words.
 
 2. Chop the `full_scenario` into logical text blocks. Each text block should be as plain text without any markup.
